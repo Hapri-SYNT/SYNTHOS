@@ -1,0 +1,35 @@
+{
+  "finance": [
+    "pasar_modal",
+    "perbankan",
+    "keuangan_pribadi",
+    "ekonomi_makro",
+    "keuangan_korporat",
+    "keuangan_digital",
+    "akuntansi"
+  ],
+  "pasar_modal": [
+    "saham",
+    "obligasi",
+    "reksa_dana",
+    "etf",
+    "derivatif"
+  ],
+  "perbankan": [
+    "bank_sentral",
+    "kredit",
+    "deposito"
+  ],
+  "ekonomi_makro": [
+    "inflasi",
+    "pdb"
+  ],
+  "keuangan_digital": [
+    "crypto",
+    "defi"
+  ],
+  "akuntansi": [
+    "pajak",
+    "audit"
+  ]
+}
