@@ -1,0 +1,15 @@
+{
+  "description": "SYNTOSH Core DNA \u2014 seluruh pengetahuan dikompres ke 128\u00d7128",
+  "components": {
+    "pln_vectors": 2065,
+    "gpt_embed_tokens": 50257,
+    "concept_vectors": 23,
+    "natural_concepts": 50,
+    "knowledge_categories": 64
+  },
+  "total_knowledge_vectors": 2188,
+  "dna_shape": [
+    128,
+    128
+  ]
+}
