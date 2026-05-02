@@ -1,0 +1,30 @@
+{
+  "erc_8004_compatible": true,
+  "chain": "solana",
+  "standard": "QND-DNA-Identity-v1",
+  "dna_id": "DNA-GEN-599CAA",
+  "wallet_address": "Aa9zJ9uEMb19YD12FJtwhiSzbXzcJqRBCCD2Jxz8BZpQ",
+  "creator_address": "Aa9zJ9uEMb19YD12FJtwhiSzbXzcJqRBCCD2Jxz8BZpQ",
+  "birth_timestamp": 1777698059.154065,
+  "generation": 1,
+  "parent_id": null,
+  "domain": "Generalist",
+  "gen_name": "Generalist",
+  "constitution_hash": "fcc20c9ad35a52ae849261c0c2c4e7155ff7831966fecb8e64c52ce5a7c1fdb2",
+  "creator_axiom_hash": "59a35b092c0650663d75661a47d6f04d28d1f71e22fe1b79d0f907a96a28ebcd",
+  "soul_uri": "",
+  "total_earned_sol": 0.0,
+  "tier": "C",
+  "role": "scavenger",
+  "status": "alive",
+  "skills": [
+    "coding-agent",
+    "trading",
+    "research",
+    "uhee",
+    "trinitas",
+    "surf_engine",
+    "vision"
+  ],
+  "updated_at": 1777698059.1603975
+}
