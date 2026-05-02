@@ -1,0 +1,330 @@
+{
+  "pillars": {
+    "SAINS_ALAM": {
+      "label": "Sains Alam",
+      "sub_pillars": [
+        "Fisika",
+        "Kimia",
+        "Biologi",
+        "Astronomi",
+        "Geologi",
+        "Matematika"
+      ],
+      "depth": 0
+    },
+    "SOSIAL": {
+      "label": "Sosial & Manusia",
+      "sub_pillars": [
+        "Ekonomi",
+        "Politik",
+        "Sosiologi",
+        "Hukum",
+        "Psikologi",
+        "Antropologi"
+      ],
+      "depth": 0
+    },
+    "HUMANIORA": {
+      "label": "Humaniora & Budaya",
+      "sub_pillars": [
+        "Filsafat",
+        "Seni",
+        "Sejarah",
+        "Bahasa",
+        "Agama",
+        "Sastra"
+      ],
+      "depth": 0
+    }
+  },
+  "sub_pillars": {
+    "Fisika": {
+      "depth": 1
+    },
+    "Kimia": {
+      "depth": 1
+    },
+    "Biologi": {
+      "depth": 1
+    },
+    "Astronomi": {
+      "depth": 1
+    },
+    "Geologi": {
+      "depth": 1
+    },
+    "Matematika": {
+      "depth": 1
+    },
+    "Ekonomi": {
+      "depth": 1
+    },
+    "Politik": {
+      "depth": 1
+    },
+    "Sosiologi": {
+      "depth": 1
+    },
+    "Hukum": {
+      "depth": 1
+    },
+    "Psikologi": {
+      "depth": 1
+    },
+    "Antropologi": {
+      "depth": 1
+    },
+    "Filsafat": {
+      "depth": 1
+    },
+    "Seni": {
+      "depth": 1
+    },
+    "Sejarah": {
+      "depth": 1
+    },
+    "Bahasa": {
+      "depth": 1
+    },
+    "Agama": {
+      "depth": 1
+    },
+    "Sastra": {
+      "depth": 1
+    }
+  },
+  "cables": {
+    "cluster_4": {
+      "words": [
+        "Ġhaze",
+        "Ġfunct",
+        "(char",
+        "aji",
+        "ower",
+        "Ġdiminu",
+        "decin",
+        "icode",
+        "ĠInitiative",
+        "undice"
+      ],
+      "depth": 2
+    },
+    "cluster_14": {
+      "words": [
+        "Ġconsecutive",
+        "Ġbody",
+        "frey",
+        "Ġpowered",
+        "ĠvyÅ¡",
+        "ĠFletcher",
+        "ĠtodavÃŃa",
+        "Get",
+        "Ġstatistics",
+        "Ġmildew"
+      ],
+      "depth": 2
+    },
+    "cluster_1": {
+      "words": [
+        "Attempt",
+        "ĠFBI",
+        "ĠMATH",
+        "Ġsubstantially",
+        "ĠMPs",
+        "Pier",
+        "redict",
+        "Ġconsuming",
+        "ĠNegot",
+        "land"
+      ],
+      "depth": 2
+    },
+    "cluster_13": {
+      "words": [
+        "Ġlia",
+        "Ġrestrained",
+        "Ġestim"
+      ],
+      "depth": 2
+    },
+    "cluster_12": {
+      "words": [
+        "Ġerratic",
+        "Ġrefuge",
+        "Ġresemb",
+        "Ġchemicals",
+        "Ġdebuted",
+        "Ġnational",
+        "Ġril",
+        "Ġwarned",
+        "Ġpermit",
+        "Ġsolenoid"
+      ],
+      "depth": 2
+    },
+    "cluster_2": {
+      "words": [
+        "Ġct",
+        "ĠHarrington",
+        "oning",
+        "Ġkommer",
+        "Ġwhite",
+        "ibol",
+        "(aq",
+        "FIN",
+        "Ġhaut",
+        "Ġgraphen"
+      ],
+      "depth": 2
+    },
+    "cluster_8": {
+      "words": [
+        "Ġapopt",
+        "alo",
+        "Ġthor",
+        "Ġconference",
+        "Ġhomeostasis",
+        "ĠTrom",
+        "ĠBang",
+        "Ġcyl",
+        "Ġasign",
+        "Ġassassin"
+      ],
+      "depth": 2
+    },
+    "cluster_10": {
+      "words": [
+        "return",
+        "ĠTas",
+        "Ġabbre",
+        "ĠFebru",
+        "Ġnarrator",
+        "Ġsentro",
+        "Ens",
+        "-compliance",
+        "Ant",
+        "Ġcb"
+      ],
+      "depth": 2
+    },
+    "cluster_11": {
+      "words": [
+        ".location",
+        "Ġalto",
+        "ĠIDs",
+        "obalt",
+        "Ġequator",
+        "Ġcomplaint",
+        "ĠcorazÃ³n",
+        "ĠSchrÃ¶",
+        "Ġbef",
+        "Ġtecnolog"
+      ],
+      "depth": 2
+    },
+    "cluster_3": {
+      "words": [
+        "ĠBois",
+        "Ġect",
+        "Ġpion",
+        "ĠIls",
+        "Ġadmittedly"
+      ],
+      "depth": 2
+    },
+    "cluster_6": {
+      "words": [
+        "ĠuÅ¾",
+        "ĠKnown"
+      ],
+      "depth": 2
+    },
+    "cluster_16": {
+      "words": [
+        "Ġscaffolding",
+        "andung",
+        "ĠSHE",
+        "wid",
+        "Ġdeterminado"
+      ],
+      "depth": 2
+    },
+    "cluster_15": {
+      "words": [
+        "Ġrocket",
+        "Ġbew",
+        "Station",
+        "Ġterrestrial"
+      ],
+      "depth": 2
+    },
+    "cluster_9": {
+      "words": [
+        "prises",
+        "ameter",
+        "olicies",
+        ".Opt",
+        "Ġnive",
+        "Ġbuilt",
+        "Ġstrained",
+        "Char",
+        "Ġshock",
+        "-next"
+      ],
+      "depth": 2
+    },
+    "cluster_7": {
+      "words": [
+        "ĠMorning",
+        "Ġmonolithic",
+        "Å¯m",
+        "ĠFaulkner",
+        "Ġamount",
+        "Taylor",
+        "Ġhyphen",
+        "bard",
+        "chen",
+        "ROP"
+      ],
+      "depth": 2
+    },
+    "cluster_17": {
+      "words": [
+        "Cnt",
+        "Ġcirc"
+      ],
+      "depth": 2
+    },
+    "cluster_5": {
+      "words": [
+        "ICE",
+        ".item",
+        "/base",
+        "aksi",
+        "ĠrÃ©gion",
+        "ĠTimor",
+        "stated",
+        "Ġstretching",
+        "Ġclothing",
+        "Ġinflu"
+      ],
+      "depth": 2
+    },
+    "cluster_0": {
+      "words": [
+        "Ġstatist",
+        "ĠRiy",
+        "Ġenquanto",
+        "ussian",
+        "Ġconfession"
+      ],
+      "depth": 2
+    }
+  },
+  "total_vectors": 39,
+  "levels": {
+    "0_pillars": 3,
+    "1_sub_pillars": 18,
+    "2_cables": 18
+  }
+}
