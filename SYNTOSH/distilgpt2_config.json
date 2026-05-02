@@ -1,0 +1,10 @@
+{
+  "model": "distilgpt2",
+  "d_model": 768,
+  "n_layers": 6,
+  "n_heads": 12,
+  "vocab_size": 50257,
+  "max_seq_len": 1024,
+  "bos_token_id": 50256,
+  "eos_token_id": 50256
+}
