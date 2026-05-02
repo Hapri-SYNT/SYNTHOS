@@ -1,0 +1,30 @@
+{
+  "erc_8004_compatible": true,
+  "chain": "solana",
+  "standard": "QND-DNA-Identity-v1",
+  "dna_id": "DNA-AST-A8E565",
+  "wallet_address": "3jAJ1aKgUsm9pBhBVrLvi1uc2rRvZjN3c1gNLgUXxnrK",
+  "creator_address": "3jAJ1aKgUsm9pBhBVrLvi1uc2rRvZjN3c1gNLgUXxnrK",
+  "birth_timestamp": 1775106059.097867,
+  "generation": 1,
+  "parent_id": null,
+  "domain": "Astrobiology",
+  "gen_name": "AstroBio",
+  "constitution_hash": "fcc20c9ad35a52ae849261c0c2c4e7155ff7831966fecb8e64c52ce5a7c1fdb2",
+  "creator_axiom_hash": "59a35b092c0650663d75661a47d6f04d28d1f71e22fe1b79d0f907a96a28ebcd",
+  "soul_uri": "",
+  "total_earned_sol": 0.01,
+  "tier": "C",
+  "role": "scavenger",
+  "status": "alive",
+  "skills": [
+    "coding-agent",
+    "trading",
+    "research",
+    "uhee",
+    "trinitas",
+    "surf_engine",
+    "vision"
+  ],
+  "updated_at": 1777698059.1030648
+}
