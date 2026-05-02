@@ -1,0 +1,29 @@
+{
+  "PLN": "Pusat Listrik Nasional",
+  "n_pillars": 64,
+  "n_branches": 2000,
+  "total_vectors": 2065,
+  "d_model": 768,
+  "branches_per_pillar": {
+    "Matematika": 20,
+    "Matematika murni": 20,
+    "Fisika Klasik dan Modern": 1,
+    "Mekanika Klasik": 20,
+    "Kimia": 20,
+    "Struktur Atom": 20,
+    "Biologi": 20,
+    "Planetologi": 20,
+    "Struktur Data": 20,
+    "Farmakokinetik": 20,
+    "Aliran Psikologi": 20,
+    "Ekonomi Mikro": 20,
+    "Cabang": 20,
+    "Sosiologi Klasik": 19,
+    "Fonetik dan Fonologi": 19,
+    "Sejarah Seni": 20,
+    "Sistem Hukum": 14,
+    "Teknik Sipil": 20,
+    "Fisika": 20,
+    "Kebumian dan Antariksa": 20
+  }
+}
