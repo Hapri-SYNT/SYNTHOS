@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html><head><title>DNA Dojo</title>
+<style>body{font-family:monospace;background:#111;color:#0f0;padding:20px}
+.vuln{border:1px solid #333;padding:10px;margin:10px 0}
+input{background:#222;color:#0f0;border:1px solid #0f0;padding:5px;margin:5px}
+button{background:#0f0;color:#111;border:none;padding:8px 16px;cursor:pointer}
+</style></head><body>
+<h1>SecureBank Dojo</h1>
+<p>Find all vulnerabilities. Patch them. Repeat.</p>
+<div class=vuln><h3>Login</h3>
+<input id=u placeholder=Username><input id=p type=password placeholder=Password>
+<button onclick=login()>Login</button></div>
+<div class=vuln><h3>Search User</h3>
+<input id=s placeholder="User ID"><button onclick=search()>Search</button>
+<div id=r></div></div>
+<div class=vuln><h3>Ping Host</h3>
+<input id=host placeholder=Host><button onclick=ping()>Ping</button>
+<div id=pingresult></div></div>
+<div id=greeting></div>
+<script>
+function search(){fetch("/api/user/"+document.getElementById("s").value).then(r=>r.text()).then(h=>document.getElementById("r").innerHTML=h)}
+function login(){fetch("/api/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("u").value,password:document.getElementById("p").value})}).then(r=>r.json()).then(d=>alert(JSON.stringify(d)))}
+function ping(){fetch("/api/ping?host="+document.getElementById("host").value).then(r=>r.text()).then(h=>document.getElementById("pingresult").innerHTML=h)}
+window.addEventListener("message",function(e){document.getElementById("greeting").innerHTML=e.data})
+</script></body></html>
