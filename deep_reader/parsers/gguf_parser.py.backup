@@ -1,0 +1,679 @@
+"""
+gguf_knowledge_exporter.py
+==========================
+GGUF Model Knowledge Graph Exporter with Integrated Parser + Remote Reader
+
+Features:
+  • Local GGUF parsing (multi-part, mmap, magic scan)
+  • Remote GGUF header fetching from HuggingFace (HTTP Range)
+  • Epistemic knowledge graph generation (9 categories)
+  • Causal RoPE analysis
+  • Risk assessment nodes
+  • JSON export
+
+Usage:
+  # Local file
+  python gguf_knowledge_exporter.py model.gguf -o local_brain.json
+
+  # Remote HuggingFace URL
+  python gguf_knowledge_exporter.py https://huggingface.co/.../model.gguf -o remote_brain.json
+
+  # With HF token for private models
+  python gguf_knowledge_exporter.py https://... --hf-token hf_xxxxx -o output.json
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import mmap
+import os
+import re
+import struct
+import warnings
+import hashlib
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+import sys
+
+# ===========================================================================
+# UTILITIES
+# ===========================================================================
+
+def _fmt_bytes(n: int) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:.2f} {unit}"
+        n /= 1024
+
+
+# ===========================================================================
+# BINARY READER (mmap-aware)
+# ===========================================================================
+
+class BinaryReader:
+    GGUF_MAGIC = b"GGUF"
+
+    def __init__(self, data: Union[bytes, mmap.mmap], little_endian: bool = True, base_offset: int = 0):
+        self._data = data
+        self._little_endian = little_endian
+        self._position = base_offset
+        self._base = base_offset
+        self._length = len(data)
+
+    @property
+    def position(self) -> int:
+        return self._position
+
+    @property
+    def remaining(self) -> int:
+        return self._length - self._position
+
+    def seek(self, position: int) -> None:
+        if not (0 <= position <= self._length):
+            raise EOFError(f"Seek out of bounds: {position} / {self._length}")
+        self._position = position
+
+    def skip(self, count: int) -> None:
+        self._position += count
+        if self._position > self._length:
+            raise EOFError("Unexpected end of data")
+
+    def read(self, length: int) -> bytes:
+        end = self._position + length
+        if end > self._length:
+            raise EOFError(f"Read {length} bytes overflows buffer")
+        chunk = self._data[self._position:end]
+        self._position = end
+        return bytes(chunk)
+
+    @classmethod
+    def find_magic_offset(cls, data: Union[bytes, mmap.mmap]) -> int:
+        idx = data.find(cls.GGUF_MAGIC)
+        if idx == -1:
+            raise ValueError("GGUF magic b'GGUF' not found in data")
+        if idx > 0:
+            warnings.warn(f"GGUF magic found at offset {idx} (not at byte 0)", RuntimeWarning)
+        return idx
+
+    def uint32(self) -> int:
+        fmt = "<I" if self._little_endian else ">I"
+        return struct.unpack(fmt, self.read(4))[0]
+
+    def uint64(self) -> int:
+        fmt = "<Q" if self._little_endian else ">Q"
+        return struct.unpack(fmt, self.read(8))[0]
+
+    def string(self) -> str:
+        length = self.uint64()
+        if length == 0 or length > 10_000_000:
+            return ""
+        return self.read(length).decode("utf-8", errors="replace")
+
+    def entry(self) -> Dict:
+        name = self.string()
+        gguf_type = self.uint32()
+        if gguf_type == 8:
+            val = self.string()
+        elif gguf_type == 4:
+            val = self.uint32()
+        elif gguf_type == 5:
+            val = self.uint32()
+        elif gguf_type == 6:
+            fmt = "<f" if self._little_endian else ">f"
+            val = struct.unpack(fmt, self.read(4))[0]
+        elif gguf_type == 10:
+            val = self.uint64()
+        elif gguf_type == 11:
+            val = self.uint64()
+        elif gguf_type == 9:
+            item_type = self.uint32()
+            count = self.uint64()
+            if count > 10_000_000:
+                val = []
+            elif item_type == 8:
+                val = [self.string() for _ in range(count)]
+            else:
+                val = [0 for _ in range(count)]
+        else:
+            val = None
+        return {"name": name, "value": val, "type": gguf_type}
+
+    def tensor_info(self) -> Dict:
+        name = self.string()
+        n_dims = self.uint32()
+        dims = [self.uint64() for _ in range(n_dims)]
+        qtype = self.uint32()
+        offset = self.uint64()
+        return {"name": name, "dimensions": dims, "quant_type": qtype, "offset": offset}
+
+    def align_to(self, alignment: int) -> None:
+        remainder = self._position % alignment
+        if remainder:
+            self.skip(alignment - remainder)
+
+
+# ===========================================================================
+# QUANTIZATION REGISTRY
+# ===========================================================================
+
+QUANTIZATION_TYPES: Dict[int, Dict] = {
+    0:  {"name": "F32",     "block_size": 1,   "type_size": 4,   "dtype": "float32", "bpw": 32},
+    1:  {"name": "F16",     "block_size": 1,   "type_size": 2,   "dtype": "float16", "bpw": 16},
+    2:  {"name": "Q4_0",    "block_size": 32,  "type_size": 18,  "dtype": "q4_0",    "bpw": 4.5},
+    3:  {"name": "Q4_1",    "block_size": 32,  "type_size": 20,  "dtype": "q4_1",    "bpw": 5.0},
+    6:  {"name": "Q5_0",    "block_size": 32,  "type_size": 22,  "dtype": "q5_0",    "bpw": 5.5},
+    7:  {"name": "Q5_1",    "block_size": 32,  "type_size": 24,  "dtype": "q5_1",    "bpw": 6.0},
+    8:  {"name": "Q8_0",    "block_size": 32,  "type_size": 34,  "dtype": "q8_0",    "bpw": 8.5},
+    9:  {"name": "Q8_1",    "block_size": 32,  "type_size": 40,  "dtype": "q8_1",    "bpw": 10.0},
+    10: {"name": "Q2_K",    "block_size": 256, "type_size": 84,  "dtype": "q2_K",    "bpw": 2.625},
+    11: {"name": "Q3_K",    "block_size": 256, "type_size": 110, "dtype": "q3_K",    "bpw": 3.4375},
+    12: {"name": "Q4_K",    "block_size": 256, "type_size": 144, "dtype": "q4_K",    "bpw": 4.5},
+    13: {"name": "Q5_K",    "block_size": 256, "type_size": 176, "dtype": "q5_K",    "bpw": 5.5},
+    14: {"name": "Q6_K",    "block_size": 256, "type_size": 210, "dtype": "q6_K",    "bpw": 6.5625},
+    15: {"name": "Q8_K",    "block_size": 256, "type_size": 292, "dtype": "q8_K",    "bpw": 9.125},
+    16: {"name": "IQ2_XXS", "block_size": 256, "type_size": 66,  "dtype": "iq2_xxs", "bpw": 2.0625},
+    17: {"name": "IQ2_XS",  "block_size": 256, "type_size": 74,  "dtype": "iq2_xs",  "bpw": 2.3125},
+    18: {"name": "IQ3_XXS", "block_size": 256, "type_size": 98,  "dtype": "iq3_xxs", "bpw": 3.0625},
+    19: {"name": "IQ1_S",   "block_size": 256, "type_size": 50,  "dtype": "iq1_s",   "bpw": 1.5625},
+    20: {"name": "IQ4_NL",  "block_size": 32,  "type_size": 18,  "dtype": "iq4_nl",  "bpw": 4.5},
+    21: {"name": "IQ3_S",   "block_size": 256, "type_size": 106, "dtype": "iq3_s",   "bpw": 3.3125},
+    22: {"name": "IQ2_S",   "block_size": 256, "type_size": 84,  "dtype": "iq2_s",   "bpw": 2.625},
+    23: {"name": "IQ4_XS",  "block_size": 256, "type_size": 136, "dtype": "iq4_xs",  "bpw": 4.25},
+    24: {"name": "I8",      "block_size": 1,   "type_size": 1,   "dtype": "int8",    "bpw": 8},
+    25: {"name": "I16",     "block_size": 1,   "type_size": 2,   "dtype": "int16",   "bpw": 16},
+    26: {"name": "I32",     "block_size": 1,   "type_size": 4,   "dtype": "int32",   "bpw": 32},
+    27: {"name": "I64",     "block_size": 1,   "type_size": 8,   "dtype": "int64",   "bpw": 64},
+    28: {"name": "F64",     "block_size": 1,   "type_size": 8,   "dtype": "float64", "bpw": 64},
+    29: {"name": "IQ1_M",   "block_size": 256, "type_size": 56,  "dtype": "iq1_m",   "bpw": 1.75},
+    30: {"name": "BF16",    "block_size": 1,   "type_size": 2,   "dtype": "bfloat16","bpw": 16},
+}
+
+def detect_quantization(quant_type: int) -> Dict:
+    return QUANTIZATION_TYPES.get(quant_type, {"name": f"UNKNOWN_{quant_type}", "block_size": 1, "type_size": 1, "dtype": "unknown", "bpw": 0})
+
+
+# ===========================================================================
+# METADATA READER
+# ===========================================================================
+
+class MetadataReader:
+    def __init__(self, metadata: Dict):
+        self._m = metadata
+
+    def get(self, key: str, default=None):
+        return self._m.get(key, default)
+
+    def get_model_name(self) -> str:
+        return self._m.get("general.name", "Unknown")
+
+    def get_architecture(self) -> str:
+        return self._m.get("general.architecture", "unknown")
+
+    def get_author(self) -> str:
+        return self._m.get("general.author", "unknown")
+
+    def _arch_key(self, suffix: str):
+        return f"{self.get_architecture()}.{suffix}"
+
+    def get_block_count(self) -> int:
+        return self._m.get(self._arch_key("block_count"), 0)
+
+    def get_context_length(self) -> int:
+        return self._m.get(self._arch_key("context_length"), 0)
+
+    def get_embedding_length(self) -> int:
+        return self._m.get(self._arch_key("embedding_length"), 0)
+
+    def get_feed_forward_length(self) -> int:
+        return self._m.get(self._arch_key("feed_forward_length"), 0)
+
+    def get_head_count(self) -> int:
+        return self._m.get(self._arch_key("attention.head_count"), 0)
+
+    def get_kv_head_count(self) -> int:
+        return self._m.get(self._arch_key("attention.head_count_kv"), 0)
+
+    def get_head_dim(self) -> int:
+        return self._m.get(self._arch_key("attention.key_length"), 0)
+
+    def get_rope_freq_base(self) -> float:
+        return self._m.get(self._arch_key("rope.freq_base"), 10000.0)
+
+    def get_rope_dim_count(self) -> int:
+        return self._m.get(self._arch_key("rope.dimension_count"), 0)
+
+    def is_moe(self) -> bool:
+        return bool(self._m.get(self._arch_key("expert_count"), 0))
+
+    def get_expert_count(self) -> int:
+        return self._m.get(self._arch_key("expert_count"), 0)
+
+    def get_expert_used_count(self) -> int:
+        return self._m.get(self._arch_key("expert_used_count"), 0)
+
+    def get_tokenizer_model(self) -> str:
+        return self._m.get("tokenizer.ggml.model", "unknown")
+
+    def get_vocab_size(self) -> int:
+        return self._m.get(self._arch_key("vocab_size"), 0) or len(self._m.get("tokenizer.ggml.tokens", []))
+
+    def get_bos_token_id(self) -> int:
+        return self._m.get("tokenizer.ggml.bos_token_id", -1)
+
+    def get_eos_token_id(self) -> int:
+        return self._m.get("tokenizer.ggml.eos_token_id", -1)
+
+    def get_pad_token_id(self) -> int:
+        return self._m.get("tokenizer.ggml.padding_token_id", -1)
+
+    def get_unk_token_id(self) -> int:
+        return self._m.get("tokenizer.ggml.unknown_token_id", -1)
+
+    def get_chat_template(self) -> str:
+        return self._m.get("tokenizer.chat_template", "")
+
+    def get_file_type(self) -> int:
+        return self._m.get("general.file_type", 0)
+
+    def get_summary(self) -> Dict:
+        return {
+            "name": self.get_model_name(),
+            "architecture": self.get_architecture(),
+            "layers": self.get_block_count(),
+            "context_length": self.get_context_length(),
+            "embedding_dim": self.get_embedding_length(),
+            "ffn_dim": self.get_feed_forward_length(),
+            "heads": self.get_head_count(),
+            "kv_heads": self.get_kv_head_count(),
+            "vocab_size": self.get_vocab_size(),
+            "is_moe": self.is_moe(),
+            "experts": self.get_expert_count() if self.is_moe() else 0,
+            "experts_used": self.get_expert_used_count() if self.is_moe() else 0,
+            "rope_freq_base": self.get_rope_freq_base(),
+            "tokenizer": self.get_tokenizer_model(),
+            "bos_id": self.get_bos_token_id(),
+            "eos_id": self.get_eos_token_id(),
+            "chat_template": bool(self.get_chat_template()),
+        }
+
+
+# ===========================================================================
+# PART FILE DISCOVERY
+# ===========================================================================
+
+_SPLIT_PATTERNS = [
+    re.compile(r"^(.+)-(\d+)-of-(\d+)(\.gguf)$", re.IGNORECASE),
+    re.compile(r"^(.+)(\.gguf)\.part(\d+)$", re.IGNORECASE),
+]
+
+def discover_parts(seed_path: Union[str, Path]) -> List[Path]:
+    seed = Path(seed_path)
+    siblings = list(seed.parent.glob(f"{seed.stem.replace('-00001', '')}*.gguf"))
+    siblings.extend(seed.parent.glob(f"{seed.stem.replace('00001', '*')}*.gguf"))
+    siblings = list(set(siblings))
+    return siblings if siblings else [seed]
+
+
+# ===========================================================================
+# GGUF PARSER (Local)
+# ===========================================================================
+
+class TensorInfo:
+    __slots__ = ("name", "dimensions", "quant_type", "offset", "part_index", "quant_info", "_data_start")
+    def __init__(self, name: str, dimensions: List[int], quant_type: int, offset: int, part_index: int = 0, data_start: int = 0):
+        self.name = name
+        self.dimensions = dimensions
+        self.quant_type = quant_type
+        self.offset = offset
+        self.part_index = part_index
+        self._data_start = data_start
+        self.quant_info = detect_quantization(quant_type)
+
+    @property
+    def n_elements(self) -> int:
+        n = 1
+        for d in self.dimensions:
+            n *= d
+        return n
+
+    @property
+    def n_bytes(self) -> int:
+        bs = self.quant_info.get("block_size", 1)
+        ts = self.quant_info.get("type_size", 1)
+        return (self.n_elements * ts) // bs if bs > 0 else self.n_elements * ts
+
+    @property
+    def shape_str(self) -> str:
+        return " × ".join(str(d) for d in self.dimensions)
+
+    @property
+    def dtype(self) -> str:
+        return self.quant_info.get("dtype", "unknown")
+
+
+class GGUFReader:
+    def __init__(self, paths: Union[str, Path, List[Union[str, Path]]], use_mmap: bool = False, scan_magic: bool = True):
+        if isinstance(paths, (str, Path)):
+            raw = [Path(paths)]
+        else:
+            raw = [Path(p) for p in paths]
+        self.paths = discover_parts(raw[0]) if len(raw) == 1 else raw
+        self.use_mmap = use_mmap
+        self.scan_magic = scan_magic
+        self.metadata = {}
+        self.tensors = {}
+
+    def read(self) -> Dict:
+        for idx, path in enumerate(self.paths):
+            part_data = self._read_one_part(path, idx)
+            for k, v in part_data.get("metadata", {}).items():
+                if k not in self.metadata:
+                    self.metadata[k] = v
+            for name, tinfo in part_data.get("tensors", {}).items():
+                if name not in self.tensors:
+                    self.tensors[name] = tinfo
+        return {"metadata": self.metadata, "tensors": self.tensors}
+
+    def _read_one_part(self, path: Path, part_idx: int) -> Dict:
+        read_size = min(500_000_000, path.stat().st_size)
+        with open(path, "rb") as fh:
+            data = fh.read(read_size)
+        if self.scan_magic:
+            magic_offset = BinaryReader.find_magic_offset(data)
+        else:
+            if data[:4] != b'GGUF':
+                raise ValueError(f"GGUF magic not found in {path}")
+            magic_offset = 0
+        return self._parse_gguf(data, path, part_idx, magic_offset)
+
+    def _parse_gguf(self, data: bytes, path: Path, part_idx: int, magic_offset: int) -> Dict:
+        r = BinaryReader(data, base_offset=magic_offset)
+        r.read(4)
+        version = r.uint32()
+        if version < 2:
+            raise ValueError(f"Unsupported GGUF version {version}")
+        n_tensors = r.uint64()
+        n_metadata_kv = r.uint64()
+        raw_metadata = {}
+        for _ in range(n_metadata_kv):
+            entry = r.entry()
+            raw_metadata[entry["name"]] = entry["value"]
+        tensors = {}
+        for _ in range(n_tensors):
+            td = r.tensor_info()
+            ti = TensorInfo(td["name"], td["dimensions"], td["quant_type"], td["offset"], part_idx, r.position)
+            tensors[ti.name] = ti
+        return {"metadata": raw_metadata, "tensors": tensors}
+
+    def get_metadata(self) -> MetadataReader:
+        return MetadataReader(self.metadata)
+
+    def get_tensor_count(self) -> int:
+        return len(self.tensors)
+
+    def get_total_tensor_bytes(self) -> int:
+        return sum(t.n_bytes for t in self.tensors.values())
+
+    def get_quantization_info(self) -> Dict:
+        if self.tensors:
+            return detect_quantization(next(iter(self.tensors.values())).quant_type)
+        return {"name": "Unknown", "bpw": 0}
+
+
+# ===========================================================================
+# REMOTE GGUF READER (HTTP Range)
+# ===========================================================================
+
+class GGUFRemoteReader:
+    def __init__(self, url: str, token: Optional[str] = None, timeout: int = 30, max_header_mb: int = 500):
+        self.url = url
+        self.token = token
+        self.timeout = timeout
+        self.max_header_bytes = max_header_mb * 1024 * 1024
+        self._header_data = None
+
+    def _fetch_header(self) -> bytes:
+        import httpx
+        headers = {"Range": f"bytes=0-{self.max_header_bytes - 1}"}
+        if self.token:
+            headers["Authorization"] = f"Bearer {self.token}"
+        print(f"[Remote] Fetching header ({self.max_header_bytes//(1024**2)} MB) from {self.url}")
+        with httpx.Client(timeout=self.timeout, follow_redirects=True) as client:
+            resp = client.get(self.url, headers=headers)
+            if resp.status_code not in (200, 206):
+                raise RuntimeError(f"HTTP {resp.status_code}: {resp.text[:200]}")
+            return resp.content
+
+    def _parse_header(self, data: bytes) -> GGUFReader:
+        magic_offset = BinaryReader.find_magic_offset(data)
+        r = BinaryReader(data, base_offset=magic_offset)
+        r.read(4)
+        version = r.uint32()
+        if version < 2:
+            raise ValueError(f"Unsupported GGUF version {version}")
+        n_tensors = r.uint64()
+        n_metadata_kv = r.uint64()
+        metadata = {}
+        for _ in range(n_metadata_kv):
+            entry = r.entry()
+            metadata[entry["name"]] = entry["value"]
+        reader = GGUFReader([])
+        reader.metadata = metadata
+        reader.tensors = {}
+        for _ in range(min(n_tensors, 10000)):
+            td = r.tensor_info()
+            ti = TensorInfo(td["name"], td["dimensions"], td["quant_type"], td["offset"], 0, r.position)
+            reader.tensors[ti.name] = ti
+        return reader
+
+    def load_knowledge_graph(self) -> List[Dict]:
+        header_data = self._fetch_header()
+        reader = self._parse_header(header_data)
+        exporter = GGUFKnowledgeExporter(reader, include_causal_analysis=True)
+        return exporter.build()
+
+
+# ===========================================================================
+# CAUSAL ROPE ANALYZER
+# ===========================================================================
+
+class _RoPECausalAnalyzer:
+    @staticmethod
+    def analyze_rope_wavelength(freq_base: float, rope_dim: int, ctx_length: int) -> Dict:
+        if rope_dim <= 0 or freq_base <= 0 or ctx_length <= 0:
+            return {}
+        theta_max = 1.0 / (freq_base ** (2.0 / rope_dim))
+        theta_min = 1.0 / (freq_base ** (2.0 - 2.0 / rope_dim)) if rope_dim > 1 else 1.0
+        extrap_factor = math.log(freq_base + 1) / math.log(10_001)
+        safe_ctx = ctx_length * min(1.5 * extrap_factor, 2.5)
+        return {"theta_min": theta_min, "theta_max": theta_max, "extrapolation_factor": extrap_factor, "estimated_safe_ctx": safe_ctx}
+
+    @staticmethod
+    def estimate_perplexity_degradation(extrap_factor: float, ctx_length: int) -> Dict:
+        if extrap_factor <= 0 or ctx_length <= 0:
+            return {}
+        results = {}
+        for mult in [1.5, 2.0, 3.0]:
+            if mult <= extrap_factor:
+                deg = 0.0
+                conf = 0.95
+            else:
+                deg = min(100.0, max(0, (1.0 - (extrap_factor / mult)) * 1.3 * 100))
+                conf = max(0.7, 0.95 - (mult - 1.5) * 0.1)
+            results[f"{mult}x_context"] = {"multiplier": mult, "token_position": int(ctx_length * mult), "degradation_percent": round(deg, 1), "confidence": round(conf, 3)}
+        return results
+
+
+# ===========================================================================
+# KNOWLEDGE GRAPH EXPORTER
+# ===========================================================================
+
+@dataclass
+class _Relation:
+    type: str
+    target_id: str
+
+@dataclass
+class _Node:
+    id: str
+    topic: str
+    subtopic: str
+    statement: str
+    epistemic_type: str
+    confidence_score: float
+    update_policy: str
+    utility_class: str
+    tags: List[str] = field(default_factory=list)
+    relations: List[_Relation] = field(default_factory=list)
+
+    def to_dict(self) -> Dict:
+        return {
+            "id": self.id, "topic": self.topic, "subtopic": self.subtopic, "statement": self.statement,
+            "epistemic_type": self.epistemic_type, "confidence_score": round(self.confidence_score, 4),
+            "update_policy": self.update_policy, "utility_class": self.utility_class,
+            "tags": self.tags, "relations": [{"type": r.type, "target_id": r.target_id} for r in self.relations],
+        }
+
+
+class GGUFKnowledgeExporter:
+    _QUANT_CONFIDENCE = {"float32":1.00,"float16":0.99,"q8_0":0.97,"q6_K":0.95,"q5_K":0.93,"q4_K":0.90,"q3_K":0.83,"q2_K":0.76}
+    def __init__(self, reader: GGUFReader, topic_prefix: Optional[str] = None, max_tensor_nodes: int = 0, include_causal_analysis: bool = True):
+        self._r = reader
+        self._mr = reader.get_metadata()
+        self._pfx = topic_prefix or self._mr.get_model_name() or "model"
+        self._max_t = max_tensor_nodes
+        self._include_causal = include_causal_analysis
+        self._nodes = []
+        self._id_set = set()
+
+    def build(self) -> List[Dict]:
+        self._nodes.clear()
+        self._id_set.clear()
+        self._add_metadata_node()
+        self._add_architecture_node()
+        self._add_quantization_node()
+        self._add_attention_node()
+        self._add_position_encoding_node()
+        if self._include_causal:
+            self._add_rope_causal_nodes()
+        self._add_tokenizer_node()
+        self._add_moe_node()
+        self._add_risk_profile_node()
+        return [n.to_dict() for n in self._nodes]
+
+    def _add_metadata_node(self):
+        self._node(id="metadata", subtopic="Model Identity",
+            statement=f"Model: {self._mr.get_model_name()}, architecture: {self._mr.get_architecture()}, author: {self._mr.get_author()}",
+            etype="fact", conf=0.99, policy="static", uclass="inference_only", tags=["metadata"])
+
+    def _add_architecture_node(self):
+        self._node(id="architecture", subtopic="Architecture",
+            statement=f"{self._mr.get_block_count()} layers, embedding {self._mr.get_embedding_length()}, context {self._mr.get_context_length()}",
+            etype="fact", conf=0.99, policy="static", uclass="inference_only", tags=["architecture"])
+
+    def _add_quantization_node(self):
+        q = self._r.get_quantization_info()
+        self._node(id="quantization", subtopic="Quantization",
+            statement=f"{q.get('name','unknown')} with {q.get('bpw',0)} bits per weight",
+            etype="fact", conf=0.95, policy="static", uclass="inference_only", tags=["quantization"])
+
+    def _add_attention_node(self):
+        heads = self._mr.get_head_count()
+        kv = self._mr.get_kv_head_count()
+        self._node(id="attention", subtopic="Attention",
+            statement=f"{heads} query heads, {kv} KV heads, head_dim={self._mr.get_head_dim()}",
+            etype="fact", conf=0.98, policy="static", uclass="inference_only", tags=["attention"])
+
+    def _add_position_encoding_node(self):
+        fb = self._mr.get_rope_freq_base()
+        rd = self._mr.get_rope_dim_count()
+        self._node(id="position_encoding", subtopic="Position Encoding",
+            statement=f"RoPE freq_base={fb}, rope_dim={rd}" if rd else "No RoPE (possibly ALiBi)",
+            etype="fact", conf=0.93, policy="static", uclass="inference_only", tags=["rope"])
+
+    def _add_rope_causal_nodes(self):
+        fb = self._mr.get_rope_freq_base()
+        rd = self._mr.get_rope_dim_count()
+        ctx = self._mr.get_context_length()
+        if not rd or fb <= 0 or ctx <= 0:
+            return
+        wave = _RoPECausalAnalyzer.analyze_rope_wavelength(fb, rd, ctx)
+        if wave:
+            self._node(id="rope_wavelength", subtopic="RoPE Wavelength",
+                statement=f"λ range [{wave['theta_min']:.2e}, {wave['theta_max']:.2e}], safe ctx ~{wave['estimated_safe_ctx']:.0f}",
+                etype="causal", conf=0.85, policy="static", uclass="decision_support", tags=["rope","causal"])
+        ppl = _RoPECausalAnalyzer.estimate_perplexity_degradation(wave.get('extrapolation_factor',0), ctx)
+        if ppl:
+            self._node(id="rope_perplexity_risk", subtopic="Perplexity Risk",
+                statement=f"2x context degradation ~{ppl.get('2.0x_context',{}).get('degradation_percent',0)}%",
+                etype="failure_mode", conf=0.80, policy="dynamic", uclass="risk_control", tags=["perplexity","risk"])
+
+    def _add_tokenizer_node(self):
+        self._node(id="tokenizer", subtopic="Tokenizer",
+            statement=f"{self._mr.get_tokenizer_model()}, vocab {self._mr.get_vocab_size()}, chat_template: {bool(self._mr.get_chat_template())}",
+            etype="fact", conf=0.96, policy="static", uclass="inference_only", tags=["tokenizer"])
+
+    def _add_moe_node(self):
+        if not self._mr.is_moe():
+            return
+        self._node(id="moe", subtopic="Mixture of Experts",
+            statement=f"{self._mr.get_expert_count()} experts, {self._mr.get_expert_used_count()} active per token",
+            etype="fact", conf=0.98, policy="static", uclass="inference_only", tags=["moe"])
+
+    def _add_risk_profile_node(self):
+        total_bytes = self._r.get_total_tensor_bytes()
+        vram_gb = total_bytes * 1.2 / (1024**3)
+        self._node(id="risk_profile", subtopic="Risk Profile",
+            statement=f"Est. VRAM: {vram_gb:.1f} GB, tensors: {self._r.get_tensor_count()}",
+            etype="heuristic", conf=0.88, policy="dynamic", uclass="risk_control", tags=["risk","vram"])
+
+    def _node(self, id, subtopic, statement, etype, conf, policy, uclass, tags, relations=None):
+        if id in self._id_set:
+            return
+        self._id_set.add(id)
+        self._nodes.append(_Node(id=id, topic=self._pfx, subtopic=subtopic, statement=statement,
+            epistemic_type=etype, confidence_score=max(0.0, min(1.0, conf)),
+            update_policy=policy, utility_class=uclass, tags=tags, relations=relations or []))
+
+
+# ===========================================================================
+# CLI
+# ===========================================================================
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description="GGUF Knowledge Graph Exporter (Local + Remote)")
+    parser.add_argument("input", help="Local .gguf file path or HuggingFace URL")
+    parser.add_argument("-o", "--output", default="knowledge.json", help="Output JSON file")
+    parser.add_argument("--hf-token", help="HuggingFace token for private models")
+    parser.add_argument("--no-causal", action="store_true", help="Disable causal analysis")
+    args = parser.parse_args()
+
+    is_remote = args.input.startswith("http://") or args.input.startswith("https://")
+
+    if is_remote:
+        if not args.hf_token:
+            print("[WARN] No HF token provided. Public models only.")
+        print(f"🌐 Fetching remote GGUF header from: {args.input}")
+        remote = GGUFRemoteReader(args.input, token=args.hf_token, max_header_mb=500)
+        nodes = remote.load_knowledge_graph()
+    else:
+        print(f"📂 Loading local GGUF: {args.input}")
+        reader = GGUFReader(args.input, use_mmap=False, scan_magic=True)
+        reader.read()
+        exporter = GGUFKnowledgeExporter(reader, include_causal_analysis=not args.no_causal)
+        nodes = exporter.build()
+
+    with open(args.output, "w", encoding="utf-8") as f:
+        json.dump(nodes, f, indent=2, ensure_ascii=False)
+
+    print(f"✅ Exported {len(nodes)} nodes to {args.output}")
+    if nodes:
+        print(f"Sample: {nodes[0].get('id', '')} - {nodes[0].get('statement', '')[:80]}...")
+
+
+if __name__ == "__main__":
+    main()
