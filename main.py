@@ -1,6 +1,3 @@
-# main.py — RECOVERY FINAL v7
-# Semua kabel colok: Helius, daily_cycle, gossip, surf_engine, UHEE, run_universal_worker
-
 import asyncio
 import time
 import threading
